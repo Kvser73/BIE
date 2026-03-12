@@ -74,12 +74,10 @@ export const mediaAssets = {
     favicon: createImageAsset('logo.ico'),
   },
   hero: {
-    // The public and public_min hero files are identical.
-    // Keep preview/original/download on the same public_min object key to avoid URL switching reloads.
     mainVideo: {
-      previewUrl: buildOssAsset(PREVIEW_BASE_URL, PREVIEW_PREFIX, 'videos/enhance_wipe_cell_1080p_h264.mp4'),
-      originalPreviewUrl: buildOssAsset(PREVIEW_BASE_URL, PREVIEW_PREFIX, 'videos/enhance_wipe_cell_1080p_h264.mp4'),
-      downloadUrl: buildOssAsset(DOWNLOAD_BASE_URL, PREVIEW_PREFIX, 'videos/enhance_wipe_cell_1080p_h264.mp4'),
+      previewUrl: buildOssAsset(PREVIEW_BASE_URL, ORIGINAL_PREFIX, 'videos/enhance_wipe_cell_1080p_h264.mp4'),
+      originalPreviewUrl: buildOssAsset(PREVIEW_BASE_URL, ORIGINAL_PREFIX, 'videos/enhance_wipe_cell_1080p_h264.mp4'),
+      downloadUrl: buildOssAsset(DOWNLOAD_BASE_URL, DOWNLOAD_PREFIX, 'videos/enhance_wipe_cell_1080p_h264.mp4'),
     },
   },
   performance: {

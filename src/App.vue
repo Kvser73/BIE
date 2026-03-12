@@ -117,6 +117,9 @@ const logoSrc = computed(() => resolveMediaSrc(siteContent.meta.logoUrl))
 const progressiveImageLoadedKeys = ref(new Set())
 const activatedPreviewVideoKeys = ref(new Set())
 const heroVideoGateVisible = ref(Boolean(siteContent.hero?.video?.src))
+const heroVideoHasRenderedFrame = ref(false)
+const heroVideoTimedOut = ref(false)
+const heroVideoLoadFailed = ref(false)
 const heroBulletListRef = ref(null)
 const heroMediaWrapRef = ref(null)
 const heroVideoRef = ref(null)
@@ -141,6 +144,7 @@ let originalPreviewFetchController = null
 let originalPreviewObjectUrl = ''
 let originalPreviewRequestSeq = 0
 let heroVideoGateTimer = null
+let heroVideoFrameCallbackId = null
 let layoutSyncRaf = 0
 let heroResizeObserver = null
 let underwaterAutoOriginalUpgradeStarted = false
@@ -1219,8 +1223,27 @@ function handlePreviewVideoClick(videoKey, event) {
   }
 }
 
-function markHeroVideoReady() {
+function clearHeroVideoFrameCallback() {
+  const heroVideoEl = heroVideoRef.value
+  if (
+    heroVideoEl &&
+    heroVideoFrameCallbackId !== null &&
+    typeof heroVideoEl.cancelVideoFrameCallback === 'function'
+  ) {
+    try {
+      heroVideoEl.cancelVideoFrameCallback(heroVideoFrameCallbackId)
+    } catch {
+      // Ignore browser-specific cancellation issues.
+    }
+  }
+  heroVideoFrameCallbackId = null
+}
+
+function markHeroVideoReady({ force = false } = {}) {
   if (!heroVideoGateVisible.value) {
+    return
+  }
+  if (!force && !heroVideoHasRenderedFrame.value) {
     return
   }
   heroVideoGateVisible.value = false
@@ -1230,20 +1253,49 @@ function markHeroVideoReady() {
   }
 }
 
-function handleHeroVideoReady() {
+function markHeroVideoRenderedFrame() {
+  heroVideoHasRenderedFrame.value = true
   markHeroVideoReady()
-  nextTick(() => {
-    ensureHeroVideoPlayback()
-  })
+}
+
+function scheduleHeroVideoRenderedFrameCheck() {
+  const heroVideoEl = heroVideoRef.value
+  if (!heroVideoEl || heroVideoHasRenderedFrame.value) {
+    return
+  }
+  if (typeof heroVideoEl.requestVideoFrameCallback === 'function') {
+    if (heroVideoFrameCallbackId !== null) {
+      return
+    }
+    heroVideoFrameCallbackId = heroVideoEl.requestVideoFrameCallback(() => {
+      heroVideoFrameCallbackId = null
+      markHeroVideoRenderedFrame()
+    })
+    return
+  }
+  if (typeof window !== 'undefined' && heroVideoEl.readyState >= 2) {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        markHeroVideoRenderedFrame()
+      })
+    })
+  }
+}
+
+function handleHeroVideoReady() {
+  scheduleHeroVideoRenderedFrameCheck()
+  ensureHeroVideoPlayback({ allowWhileGated: true })
 }
 
 function handleHeroVideoError() {
-  markHeroVideoReady()
+  heroVideoLoadFailed.value = true
+  markHeroVideoReady({ force: true })
 }
 
-function ensureHeroVideoPlayback() {
+function ensureHeroVideoPlayback(options = {}) {
+  const { allowWhileGated = false } = options
   const heroVideoEl = heroVideoRef.value
-  if (!heroVideoEl || heroVideoGateVisible.value) {
+  if (!heroVideoEl || (heroVideoGateVisible.value && !allowWhileGated)) {
     return
   }
   if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
@@ -1256,6 +1308,7 @@ function ensureHeroVideoPlayback() {
   if (maybePromise && typeof maybePromise.catch === 'function') {
     maybePromise.catch(() => {})
   }
+  scheduleHeroVideoRenderedFrameCheck()
 }
 
 function handleHeroPlaybackVisibilityRestore() {
@@ -1632,7 +1685,8 @@ onMounted(() => {
   document.addEventListener('visibilitychange', handleHeroPlaybackVisibilityRestore)
   if (heroVideoGateVisible.value) {
     heroVideoGateTimer = setTimeout(() => {
-      markHeroVideoReady()
+      heroVideoTimedOut.value = true
+      markHeroVideoReady({ force: true })
     }, 9000)
   }
 
@@ -1670,6 +1724,7 @@ onBeforeUnmount(() => {
     clearTimeout(heroVideoGateTimer)
     heroVideoGateTimer = null
   }
+  clearHeroVideoFrameCallback()
   if (layoutSyncRaf) {
     cancelAnimationFrame(layoutSyncRaf)
     layoutSyncRaf = 0
@@ -1708,7 +1763,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <main class="page-main" v-show="!heroVideoGateVisible">
+    <main class="page-main">
       <div class="first-screen">
         <section class="shell hero-section">
           <h2 class="focus-title">{{ siteContent.hero.title }}</h2>
@@ -1726,11 +1781,20 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="hero-media-card">
-            <div ref="heroMediaWrapRef" class="hero-media-wrap" :style="heroMediaWrapStyle">
+            <div
+              ref="heroMediaWrapRef"
+              :class="[
+                'hero-media-wrap',
+                {
+                  'hero-media-wrap--fallback': !heroVideoHasRenderedFrame && (heroVideoTimedOut || heroVideoLoadFailed),
+                },
+              ]"
+              :style="heroMediaWrapStyle"
+            >
               <video
                 v-if="resolveMediaSrc(siteContent.hero.video.src)"
                 ref="heroVideoRef"
-                class="hero-video"
+                :class="['hero-video', { 'is-visible': heroVideoHasRenderedFrame }]"
                 :src="resolveMediaSrc(siteContent.hero.video.src)"
                 :poster="resolvePosterSrc(siteContent.hero.video.poster)"
                 :autoplay="getVideoMode(siteContent.hero.video.slot).autoplay"
@@ -1742,8 +1806,20 @@ onBeforeUnmount(() => {
                 @loadeddata="handleHeroVideoReady"
                 @canplay="handleHeroVideoReady"
                 @canplaythrough="handleHeroVideoReady"
+                @playing="handleHeroVideoReady"
                 @error="handleHeroVideoError"
               />
+              <div
+                v-if="!heroVideoHasRenderedFrame && (heroVideoTimedOut || heroVideoLoadFailed)"
+                class="hero-video-fallback"
+              >
+                <p class="hero-video-fallback-title">
+                  {{ heroVideoLoadFailed ? 'Hero video is temporarily unavailable.' : 'Hero video is still preparing.' }}
+                </p>
+                <p class="hero-video-fallback-text">
+                  {{ heroVideoLoadFailed ? 'The page has loaded, but the preview video could not render yet.' : 'The page is ready. The preview video will fade in as soon as the first frame is rendered.' }}
+                </p>
+              </div>
             </div>
             <p
               v-if="resolvePreviewSrc(siteContent.hero.video.previewUrl) && resolveDownloadSrc(siteContent.hero.video.downloadUrl)"
@@ -2635,7 +2711,7 @@ onBeforeUnmount(() => {
   position: fixed;
   inset: 0;
   z-index: 95;
-  background: #ffffff;
+  background: linear-gradient(180deg, rgba(236, 244, 255, 0.96), rgba(246, 249, 255, 0.98));
   display: grid;
   place-items: center;
 }
@@ -2867,6 +2943,11 @@ onBeforeUnmount(() => {
   height: auto !important;
   align-self: stretch;
   overflow: hidden;
+  background: #07111f;
+}
+
+.hero-media-wrap--fallback {
+  background: radial-gradient(circle at top, rgba(22, 41, 68, 0.96), rgba(7, 17, 31, 1));
 }
 
 .hero-video,
@@ -2880,7 +2961,7 @@ onBeforeUnmount(() => {
 }
 
 .hero-video {
-  background: transparent;
+  background: #07111f;
   object-fit: cover;
   object-position: var(--hero-video-object-position-x) center;
   position: absolute;
@@ -2888,6 +2969,41 @@ onBeforeUnmount(() => {
   height: 100%;
   transform: translateX(var(--hero-video-shift-x)) scale(var(--hero-video-scale));
   transform-origin: center center;
+  opacity: 0;
+  transition: opacity 0.34s ease;
+}
+
+.hero-video.is-visible {
+  opacity: 1;
+}
+
+.hero-video-fallback {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 18px;
+  color: #eef5ff;
+  background: linear-gradient(180deg, rgba(7, 17, 31, 0.18), rgba(7, 17, 31, 0.7));
+}
+
+.hero-video-fallback-title,
+.hero-video-fallback-text {
+  margin: 0;
+}
+
+.hero-video-fallback-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.hero-video-fallback-text {
+  max-width: 36ch;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .section-video {
