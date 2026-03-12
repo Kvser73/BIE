@@ -118,8 +118,6 @@ const progressiveImageLoadedKeys = ref(new Set())
 const activatedPreviewVideoKeys = ref(new Set())
 const heroVideoGateVisible = ref(Boolean(siteContent.hero?.video?.src))
 const heroVideoHasRenderedFrame = ref(false)
-const heroVideoTimedOut = ref(false)
-const heroVideoLoadFailed = ref(false)
 const heroBulletListRef = ref(null)
 const heroMediaWrapRef = ref(null)
 const heroVideoRef = ref(null)
@@ -143,8 +141,6 @@ const urlReachabilityCache = new Map()
 let originalPreviewFetchController = null
 let originalPreviewObjectUrl = ''
 let originalPreviewRequestSeq = 0
-let heroVideoGateTimer = null
-let heroVideoFrameCallbackId = null
 let layoutSyncRaf = 0
 let heroResizeObserver = null
 let underwaterAutoOriginalUpgradeStarted = false
@@ -1223,73 +1219,27 @@ function handlePreviewVideoClick(videoKey, event) {
   }
 }
 
-function clearHeroVideoFrameCallback() {
-  const heroVideoEl = heroVideoRef.value
-  if (
-    heroVideoEl &&
-    heroVideoFrameCallbackId !== null &&
-    typeof heroVideoEl.cancelVideoFrameCallback === 'function'
-  ) {
-    try {
-      heroVideoEl.cancelVideoFrameCallback(heroVideoFrameCallbackId)
-    } catch {
-      // Ignore browser-specific cancellation issues.
-    }
-  }
-  heroVideoFrameCallbackId = null
-}
-
-function markHeroVideoReady({ force = false } = {}) {
+function markHeroVideoReady() {
   if (!heroVideoGateVisible.value) {
     return
   }
-  if (!force && !heroVideoHasRenderedFrame.value) {
-    return
-  }
-  heroVideoGateVisible.value = false
-  if (heroVideoGateTimer) {
-    clearTimeout(heroVideoGateTimer)
-    heroVideoGateTimer = null
-  }
-}
-
-function markHeroVideoRenderedFrame() {
   heroVideoHasRenderedFrame.value = true
-  markHeroVideoReady()
-}
-
-function scheduleHeroVideoRenderedFrameCheck() {
-  const heroVideoEl = heroVideoRef.value
-  if (!heroVideoEl || heroVideoHasRenderedFrame.value) {
-    return
-  }
-  if (typeof heroVideoEl.requestVideoFrameCallback === 'function') {
-    if (heroVideoFrameCallbackId !== null) {
-      return
-    }
-    heroVideoFrameCallbackId = heroVideoEl.requestVideoFrameCallback(() => {
-      heroVideoFrameCallbackId = null
-      markHeroVideoRenderedFrame()
-    })
-    return
-  }
-  if (typeof window !== 'undefined' && heroVideoEl.readyState >= 2) {
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        markHeroVideoRenderedFrame()
-      })
-    })
-  }
+  heroVideoGateVisible.value = false
 }
 
 function handleHeroVideoReady() {
-  scheduleHeroVideoRenderedFrameCheck()
   ensureHeroVideoPlayback({ allowWhileGated: true })
+  if (typeof window !== 'undefined') {
+    window.requestAnimationFrame(() => {
+      markHeroVideoReady()
+    })
+    return
+  }
+  markHeroVideoReady()
 }
 
 function handleHeroVideoError() {
-  heroVideoLoadFailed.value = true
-  markHeroVideoReady({ force: true })
+  markHeroVideoReady()
 }
 
 function ensureHeroVideoPlayback(options = {}) {
@@ -1308,7 +1258,6 @@ function ensureHeroVideoPlayback(options = {}) {
   if (maybePromise && typeof maybePromise.catch === 'function') {
     maybePromise.catch(() => {})
   }
-  scheduleHeroVideoRenderedFrameCheck()
 }
 
 function handleHeroPlaybackVisibilityRestore() {
@@ -1683,15 +1632,10 @@ onMounted(() => {
   window.addEventListener('pageshow', handleHeroPlaybackVisibilityRestore)
   window.addEventListener('focus', handleHeroPlaybackVisibilityRestore)
   document.addEventListener('visibilitychange', handleHeroPlaybackVisibilityRestore)
-  if (heroVideoGateVisible.value) {
-    heroVideoGateTimer = setTimeout(() => {
-      heroVideoTimedOut.value = true
-      markHeroVideoReady({ force: true })
-    }, 9000)
-  }
 
   nextTick(() => {
     scheduleHeroAndDatasetLayoutSync()
+    ensureHeroVideoPlayback({ allowWhileGated: true })
     if (typeof document !== 'undefined' && document.readyState === 'complete') {
       handleWindowLoadForUnderwaterOriginalUpgrade()
     }
@@ -1720,11 +1664,6 @@ onBeforeUnmount(() => {
   abortOriginalPreviewFetch()
   clearOriginalPreviewObjectUrl()
   resetOriginalPreviewImageLoadState()
-  if (heroVideoGateTimer) {
-    clearTimeout(heroVideoGateTimer)
-    heroVideoGateTimer = null
-  }
-  clearHeroVideoFrameCallback()
   if (layoutSyncRaf) {
     cancelAnimationFrame(layoutSyncRaf)
     layoutSyncRaf = 0
@@ -1783,12 +1722,7 @@ onBeforeUnmount(() => {
           <div class="hero-media-card">
             <div
               ref="heroMediaWrapRef"
-              :class="[
-                'hero-media-wrap',
-                {
-                  'hero-media-wrap--fallback': !heroVideoHasRenderedFrame && (heroVideoTimedOut || heroVideoLoadFailed),
-                },
-              ]"
+              class="hero-media-wrap"
               :style="heroMediaWrapStyle"
             >
               <video
@@ -1809,17 +1743,6 @@ onBeforeUnmount(() => {
                 @playing="handleHeroVideoReady"
                 @error="handleHeroVideoError"
               />
-              <div
-                v-if="!heroVideoHasRenderedFrame && (heroVideoTimedOut || heroVideoLoadFailed)"
-                class="hero-video-fallback"
-              >
-                <p class="hero-video-fallback-title">
-                  {{ heroVideoLoadFailed ? 'Hero video is temporarily unavailable.' : 'Hero video is still preparing.' }}
-                </p>
-                <p class="hero-video-fallback-text">
-                  {{ heroVideoLoadFailed ? 'The page has loaded, but the preview video could not render yet.' : 'The page is ready. The preview video will fade in as soon as the first frame is rendered.' }}
-                </p>
-              </div>
             </div>
             <p
               v-if="resolvePreviewSrc(siteContent.hero.video.previewUrl) && resolveDownloadSrc(siteContent.hero.video.downloadUrl)"
@@ -1969,37 +1892,39 @@ onBeforeUnmount(() => {
 
           <article class="dataset-card">
             <h3 class="dataset-card-title">{{ siteContent.sections.dataset.cardTitle }}</h3>
-            <div
-              v-if="resolveMediaSrc(siteContent.sections.dataset.image.placeholderSrc)"
-              :class="['progressive-image-wrap', 'dataset-image', { 'is-loaded': isProgressiveImageLoaded('dataset_main') }]"
-            >
-              <img
-                v-if="!isProgressiveImageLoaded('dataset_main')"
-                :src="resolveMediaSrc(siteContent.sections.dataset.image.placeholderSrc)"
-                :alt="`${siteContent.sections.dataset.image.alt} placeholder`"
-                class="media-image progressive-image-placeholder"
-              />
-              <img
-                v-if="resolveMediaSrc(siteContent.sections.dataset.image.src)"
-                :src="resolveMediaSrc(siteContent.sections.dataset.image.src)"
-                :alt="siteContent.sections.dataset.image.alt"
-                :class="['media-image', 'progressive-image-final', { 'is-loaded': isProgressiveImageLoaded('dataset_main') }]"
-                @load="markProgressiveImageLoaded('dataset_main')"
-              />
-            </div>
-            <div class="dataset-label-row">
-              <span v-for="(label, index) in siteContent.sections.dataset.footerLabels" :key="`dataset-footer-${index}`">{{ label }}</span>
-            </div>
-            <div class="dataset-btn-row">
-              <button
-                v-for="button in siteContent.sections.dataset.buttons"
-                :key="button.key"
-                type="button"
-                class="pill-btn pill-btn-paper"
-                @click="openComingSoon(button.key)"
+            <div class="dataset-card-content">
+              <div
+                v-if="resolveMediaSrc(siteContent.sections.dataset.image.placeholderSrc)"
+                :class="['progressive-image-wrap', 'dataset-image', { 'is-loaded': isProgressiveImageLoaded('dataset_main') }]"
               >
-                {{ button.label }}
-              </button>
+                <img
+                  v-if="!isProgressiveImageLoaded('dataset_main')"
+                  :src="resolveMediaSrc(siteContent.sections.dataset.image.placeholderSrc)"
+                  :alt="`${siteContent.sections.dataset.image.alt} placeholder`"
+                  class="media-image progressive-image-placeholder"
+                />
+                <img
+                  v-if="resolveMediaSrc(siteContent.sections.dataset.image.src)"
+                  :src="resolveMediaSrc(siteContent.sections.dataset.image.src)"
+                  :alt="siteContent.sections.dataset.image.alt"
+                  :class="['media-image', 'progressive-image-final', { 'is-loaded': isProgressiveImageLoaded('dataset_main') }]"
+                  @load="markProgressiveImageLoaded('dataset_main')"
+                />
+              </div>
+              <div class="dataset-label-row">
+                <span v-for="(label, index) in siteContent.sections.dataset.footerLabels" :key="`dataset-footer-${index}`">{{ label }}</span>
+              </div>
+              <div class="dataset-btn-row">
+                <button
+                  v-for="button in siteContent.sections.dataset.buttons"
+                  :key="button.key"
+                  type="button"
+                  class="pill-btn pill-btn-paper"
+                  @click="openComingSoon(button.key)"
+                >
+                  {{ button.label }}
+                </button>
+              </div>
             </div>
           </article>
         </div>
@@ -2946,10 +2871,6 @@ onBeforeUnmount(() => {
   background: #07111f;
 }
 
-.hero-media-wrap--fallback {
-  background: radial-gradient(circle at top, rgba(22, 41, 68, 0.96), rgba(7, 17, 31, 1));
-}
-
 .hero-video,
 .section-video {
   width: 100%;
@@ -2975,35 +2896,6 @@ onBeforeUnmount(() => {
 
 .hero-video.is-visible {
   opacity: 1;
-}
-
-.hero-video-fallback {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 18px;
-  color: #eef5ff;
-  background: linear-gradient(180deg, rgba(7, 17, 31, 0.18), rgba(7, 17, 31, 0.7));
-}
-
-.hero-video-fallback-title,
-.hero-video-fallback-text {
-  margin: 0;
-}
-
-.hero-video-fallback-title {
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.hero-video-fallback-text {
-  max-width: 36ch;
-  font-size: 13px;
-  line-height: 1.45;
 }
 
 .section-video {
@@ -3330,6 +3222,13 @@ onBeforeUnmount(() => {
   transform: translate(-18px, -10px);
 }
 
+.dataset-card-content {
+  display: grid;
+  gap: 5px;
+  transform: scale(1.06);
+  transform-origin: top center;
+}
+
 .dataset-card-title {
   margin: 0 auto 8px;
   font-size: clamp(13px, 1.02vw, 17px);
@@ -3391,7 +3290,7 @@ onBeforeUnmount(() => {
   transform: translateX(-20px);
 }
 
-.dataset-card > .progressive-image-wrap {
+.dataset-card-content > .progressive-image-wrap {
   width: min(66%, 420px);
 }
 
@@ -4504,6 +4403,7 @@ onBeforeUnmount(() => {
   .hero-bullet-list,
   .dataset-text,
   .dataset-layout .dataset-card,
+  .dataset-card-content,
   .tutorial-list,
   .tutorial-media {
     margin-left: 0;
