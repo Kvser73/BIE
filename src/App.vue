@@ -3225,8 +3225,6 @@ onBeforeUnmount(() => {
 .dataset-card-content {
   display: grid;
   gap: 5px;
-  transform: scale(1.06);
-  transform-origin: top center;
 }
 
 .dataset-card-title {
@@ -3247,17 +3245,17 @@ onBeforeUnmount(() => {
 }
 
 .dataset-image .media-image {
-  max-height: min(220px, 32vh);
+  max-height: min(250px, 35vh);
   width: 100%;
   object-fit: contain;
 }
 
 .dataset-label-row {
-  margin-top: 0;
+  margin-top: -1px;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   column-gap: clamp(8px, 1.1vw, 14px);
-  width: min(66%, 420px);
+  width: min(75%, 480px);
   margin-left: auto;
   margin-right: auto;
   color: #4f5d73;
@@ -3266,11 +3264,11 @@ onBeforeUnmount(() => {
 }
 
 .dataset-btn-row {
-  margin-top: 2px;
+  margin-top: -2px;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   column-gap: clamp(8px, 1.1vw, 14px);
-  width: min(66%, 420px);
+  width: min(75%, 480px);
   margin-left: auto;
   margin-right: auto;
 }
@@ -3280,24 +3278,35 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 
-.dataset-label-row span:nth-child(2),
-.dataset-btn-row .pill-btn:nth-child(2) {
+.dataset-label-row span:first-child {
   transform: none;
 }
 
-.dataset-label-row span:first-child,
-.dataset-btn-row .pill-btn:first-child {
+.dataset-label-row span:nth-child(2) {
   transform: translateX(-20px);
 }
 
 .dataset-card-content > .progressive-image-wrap {
-  width: min(66%, 420px);
+  width: min(82%, 540px);
+  transform: translateX(55px) scale(1.6);
+  transform-origin: center;
+  margin-bottom: 56px;
 }
 
 .dataset-btn-row .pill-btn {
-  min-height: 34px;
-  font-size: clamp(10px, 0.76vw, 12px);
-  padding: 0 8px;
+  width: 88%;
+  min-height: 30px;
+  font-size: clamp(9px, 0.68vw, 11px);
+  padding: 0 6px;
+  justify-self: center;
+}
+
+.dataset-btn-row .pill-btn:first-child {
+  transform: none;
+}
+
+.dataset-btn-row .pill-btn:nth-child(2) {
+  transform: translateX(-20px);
 }
 
 .tutorial-layout {
@@ -4408,6 +4417,11 @@ onBeforeUnmount(() => {
   .tutorial-media {
     margin-left: 0;
     transform: none;
+  }
+
+  .dataset-card-content > .progressive-image-wrap {
+    transform: none;
+    margin-bottom: 14px;
   }
 
   .content-mid-backdrop::before {
